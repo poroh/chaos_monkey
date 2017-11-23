@@ -92,7 +92,7 @@ init([]) ->
                     exit(Error)
             end
     end,
-    random:seed(now()),
+    rand:seed(exs1024s),
     {ok, #state{}}.
 
 handle_call({on, Opts}, _From, State = #state{is_active = false}) ->
@@ -132,7 +132,7 @@ handle_info(kill_something, State = #state{avg_wait = AvgWait, apps = Apps}) ->
             p("Warning: no killable processes.", [])
     end,
     Var = 0.3, %% I.e. 70% to 130% of Waittime
-    WaitTime = round(AvgWait * ((1 - Var) + (Var * 2 * random:uniform()))),
+    WaitTime = round(AvgWait * ((1 - Var) + (Var * 2 * rand:uniform()))),
     {ok, Ref} = timer:send_after(WaitTime, kill_something),
     {noreply, State#state{timer_ref = Ref}};
 handle_info(Info, State) ->
@@ -200,7 +200,7 @@ do_almost_kill(AppFilter) ->
 do_find_orphans() ->
     Ps = [{P,
            application:get_application(P),
-           pman_process:is_system_process(P)}
+           erts_internal:is_system_process(P)}
           || P <- erlang:processes()],
     lists:zf(fun({P, undefined, false}) ->
                      case is_shell(P) of
@@ -252,7 +252,7 @@ verify_opts(Opts) ->
     end.
 
 randomize(Xs) ->
-    [V || {_, V} <- lists:sort([{random:uniform(), X} || X <- Xs])].
+    [V || {_, V} <- lists:sort([{rand:uniform(), X} || X <- Xs])].
 
 %% random(L) ->
 %%     lists:nth(random:uniform(length(L)), L).
@@ -463,7 +463,13 @@ kill(Pid) ->
 %% START OF FORMATTING FUNCTIONS
 
 p(Format, Data) ->
-    catch throw(get_stacktrace), Stacktrace = erlang:get_stacktrace(),
+    Stacktrace = 
+        try
+            throw(get_stacktrace)
+        catch
+            throw:get_stacktrace ->
+                erlang:get_stacktrace()
+        end,
     MFAInfo = hd(tl(Stacktrace)),
     String =
         case MFAInfo of
@@ -544,7 +550,7 @@ is_killable(Pid, App, AppFilter, IsSupervisorKillable)
         andalso
         not(lists:member(App, [kernel, chaos_monkey]))
         andalso
-        not(pman_process:is_system_process(Pid))
+        not(erts_internal:is_system_process(Pid))
         andalso
         not(is_shell(Pid))
         andalso
@@ -554,7 +560,7 @@ is_killable(Pid, App, AppFilter, IsSupervisorKillable)
          orelse
          not(is_supervisor(Pid))).
 
-%% Theoretically pman_process:is_system_process/1 should say true for
+%% Theoretically erts_internal:is_system_process/1 should say true for
 %% the shell.  Well, it doesn't, so this is a workaround until it
 %% does.
 is_shell(Pid) ->

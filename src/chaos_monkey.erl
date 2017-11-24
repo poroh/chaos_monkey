@@ -15,7 +15,8 @@
          kill/0,
          off/0,
          on/0,
-         on/1]).
+         on/1,
+         linked_with/4]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -550,7 +551,11 @@ is_killable(Pid, App, AppFilter, IsSupervisorKillable)
         andalso
         not(lists:member(App, [kernel, chaos_monkey]))
         andalso
+        not(linked_with(application_controller, Pid, gb_sets:new(), 4))
+        andalso
         not(erts_internal:is_system_process(Pid))
+        andalso
+        not(linked_with_system(Pid, gb_sets:new(), 0))
         andalso
         not(is_shell(Pid))
         andalso
@@ -581,3 +586,67 @@ is_shell(Pid) ->
                 false -> false
             end
     end.
+
+linked_with(_Name, _Pid, _Visited, 0) ->
+    false;
+linked_with(Name, Pid, Visited, N) when is_pid(Pid) ->
+    case erlang:process_info(Pid, registered_name) of
+        { registered_name, Name } ->
+            true;
+        _ ->
+            linked_with(Name, erlang:process_info(Pid, links), gb_sets:add_element(Pid, Visited), N-1)
+    end;
+linked_with(Name, { links, Pids }, Visited, N) ->
+    lists:foldl(fun(_, true) ->
+                        true;
+                   (Link, false) ->
+                        case gb_sets:is_element(Link, Visited) of
+                            false ->
+                                linked_with(Name, Link, Visited, N);
+                            true ->
+                                false
+                        end
+                end,
+                false,
+                Pids);
+linked_with(_, _, _, _) ->
+    false.
+
+linked_with_system(Pid, Visited, N) ->
+    Result = do_linked_with_system(Pid, Visited, N),
+    % io:format("checking pid ~p => ~p ~n", [ Pid, Result]),
+    Result.
+
+do_linked_with_system(_, _, 5) ->
+    false;
+do_linked_with_system(Pid, Visited, N) when is_pid(Pid) ->
+    case erlang:process_info(Pid, registered_name) of
+        { registered_name, Name } ->
+            case forbidden_name(Name) of
+                true ->
+                    true;
+                false ->
+                    linked_with_system(erlang:process_info(Pid, links), gb_sets:add_element(Pid, Visited), N+1)
+            end;
+        _ ->
+            linked_with_system(erlang:process_info(Pid, links), gb_sets:add_element(Pid, Visited), N+1)
+    end;
+do_linked_with_system({ links, Pids }, Visited, N) when is_list(Pids) ->
+    lists:foldl(fun(_, true) ->
+                        true;
+                   (Link, false) ->
+                        case gb_sets:is_element(Link, Visited) of
+                            false ->
+                                linked_with_system(Link, Visited, N);
+                            true ->
+                                false
+                        end
+                end,
+                false,
+                Pids);
+do_linked_with_system(_, _, _) ->
+    false.
+
+
+forbidden_name(kernel_sup) -> true;
+forbidden_name(_) ->          false.
